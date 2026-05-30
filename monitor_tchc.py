@@ -2,7 +2,12 @@
 TCHC Affordable Rent Monitor
 Scrapes torontohousing.ca for new listings and notifies subscribers by email.
 
-Setup email notifications:
+Setup email notifications (pick one):
+  Option A — environment variables (recommended):
+    set GMAIL_USER=you@gmail.com
+    set GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
+
+  Option B — config file:
   1. Enable 2-Step Verification on your Gmail account
   2. Go to myaccount.google.com/apppasswords and generate an App Password
   3. Create data/email_config.json:
@@ -23,7 +28,8 @@ from email.mime.text import MIMEText
 import requests
 from bs4 import BeautifulSoup
 
-TCHC_URL         = "https://torontohousing.ca/prospective-tenants/affordable-rent"
+from config import TCHC_URL
+
 STATE_FILE       = "data/tchc_state.json"
 SUBSCRIBERS_FILE = "data/subscribers.json"
 EMAIL_CONFIG     = "data/email_config.json"
@@ -154,6 +160,20 @@ def parse_listings(html: str) -> list[dict]:
     return listings
 
 
+def _eoi_is_current(eoi: str) -> bool:
+    """Return False if the EOI closing date is in the past."""
+    if not eoi:
+        return True
+    m = re.search(r"closes\s+(\w+ \d+,\s*\d{4})", eoi, re.IGNORECASE)
+    if not m:
+        return True
+    try:
+        close_date = datetime.strptime(m.group(1).strip(), "%B %d, %Y").date()
+        return close_date >= datetime.now().date()
+    except ValueError:
+        return True
+
+
 def extract_state(html: str) -> dict:
     soup = BeautifulSoup(html, "html.parser")
     main = soup.find("main") or soup.body
@@ -162,8 +182,8 @@ def extract_state(html: str) -> dict:
 
     text      = main.get_text(separator="\n", strip=True)
     page_hash = hashlib.md5(text.encode()).hexdigest()
-    listings  = parse_listings(html)
-    has       = bool(listings) or "expression of interest" in text.lower()
+    listings  = [lst for lst in parse_listings(html) if _eoi_is_current(lst["eoi"])]
+    has       = bool(listings)
 
     return {
         "hash":         page_hash,
@@ -187,8 +207,10 @@ def load_state() -> dict:
 
 
 def save_state(state: dict):
-    with open(STATE_FILE, "w") as f:
+    tmp = STATE_FILE + ".tmp"
+    with open(tmp, "w") as f:
         json.dump(state, f, indent=2)
+    os.replace(tmp, STATE_FILE)
 
 
 # ── Subscribers ───────────────────────────────────────────────────────────────
@@ -201,6 +223,8 @@ def load_subscribers() -> list[str]:
 
 
 def add_subscriber(email: str) -> bool:
+    if not email or "@" not in email:
+        raise ValueError(f"Invalid email: {email!r}")
     os.makedirs("data", exist_ok=True)
     data = {"emails": []}
     if os.path.exists(SUBSCRIBERS_FILE):
@@ -216,24 +240,37 @@ def add_subscriber(email: str) -> bool:
 
 # ── Email ─────────────────────────────────────────────────────────────────────
 
+def _load_email_config() -> dict | None:
+    """Read credentials from env vars first, fall back to JSON file."""
+    user     = os.environ.get("GMAIL_USER")
+    password = os.environ.get("GMAIL_APP_PASSWORD")
+    if user and password:
+        return {"gmail_user": user, "gmail_app_password": password}
+    if os.path.exists(EMAIL_CONFIG):
+        with open(EMAIL_CONFIG) as f:
+            return json.load(f)
+    return None
+
+
 def send_notifications(listings: list[dict], subscribers: list[str]):
-    if not subscribers or not os.path.exists(EMAIL_CONFIG):
-        print(f"  No email config at {EMAIL_CONFIG} — skipping notifications")
+    if not subscribers:
         return
 
-    with open(EMAIL_CONFIG) as f:
-        cfg = json.load(f)
+    cfg = _load_email_config()
+    if not cfg:
+        print(f"  No email credentials (set GMAIL_USER/GMAIL_APP_PASSWORD or create {EMAIL_CONFIG})")
+        return
 
     subject = f"TCHC: New Affordable Units Available — {datetime.now().strftime('%b %d, %Y')}"
 
     lines = ["New listings on torontohousing.ca:\n"]
-    for l in listings:
-        lines.append(f"  {l['address']}")
-        if l["units"]:
-            unit_str = "  · ".join(f"{u['count']}×{u['type']}" for u in l["units"])
+    for listing in listings:
+        lines.append(f"  {listing['address']}")
+        if listing["units"]:
+            unit_str = "  · ".join(f"{u['count']}×{u['type']}" for u in listing["units"])
             lines.append(f"  Units: {unit_str}")
-        if l["eoi"]:
-            lines.append(f"  {l['eoi']}")
+        if listing["eoi"]:
+            lines.append(f"  {listing['eoi']}")
         lines.append("")
     lines.append(f"View and apply: {TCHC_URL}")
     body = "\n".join(lines)
@@ -263,26 +300,24 @@ def check(notify: bool = True) -> dict:
         current = extract_state(html)
         stored  = load_state()
 
-        changed    = current["hash"] != stored.get("hash")
-        new_active = current["has_listings"] and not stored.get("has_listings")
+        changed = current["hash"] != stored.get("hash")
 
         if changed:
             print(f"  Change detected — {len(current['listings'])} listing(s)")
-            for l in current["listings"]:
-                units = "  ·  ".join(f"{u['count']}×{u['type']}" for u in l["units"])
-                print(f"    {l['address']}  {units}  {l['eoi']}")
-            if notify and new_active:
+            for listing in current["listings"]:
+                units = "  ·  ".join(f"{u['count']}×{u['type']}" for u in listing["units"])
+                print(f"    {listing['address']}  {units}  {listing['eoi']}")
+            if notify and current["has_listings"]:
                 send_notifications(current["listings"], load_subscribers())
-            stored.update({
-                "hash":         current["hash"],
-                "has_listings": current["has_listings"],
-                "listings":     current["listings"],
-                "summary":      current["summary"],
-                "last_changed": now,
-            })
+            stored["hash"]         = current["hash"]
+            stored["last_changed"] = now
         else:
             print(f"  No change — {len(current['listings'])} listing(s)")
 
+        # Always sync listings — EOI filter may clear entries even when page hash is unchanged
+        stored["has_listings"] = current["has_listings"]
+        stored["listings"]     = current["listings"]
+        stored["summary"]      = current["summary"]
         stored["last_checked"] = now
         save_state(stored)
         return stored
@@ -294,9 +329,9 @@ def check(notify: bool = True) -> dict:
 
 if __name__ == "__main__":
     state = check()
-    print(f"\nCurrent state:")
-    for l in state.get("listings", []):
-        units = "  ·  ".join(f"{u['count']}×{u['type']}" for u in l.get("units", []))
-        print(f"  {l['address']}  —  {units}")
-        if l.get("eoi"):
-            print(f"    {l['eoi']}")
+    print("\nCurrent state:")
+    for listing in state.get("listings", []):
+        units = "  ·  ".join(f"{u['count']}×{u['type']}" for u in listing.get("units", []))
+        print(f"  {listing['address']}  —  {units}")
+        if listing.get("eoi"):
+            print(f"    {listing['eoi']}")

@@ -48,10 +48,11 @@ OUTPUT_DIR = "data"
 # ── Geocoders ─────────────────────────────────────────────────────────────────
 
 def _build_geocoders() -> list[tuple[str, object]]:
-    arcgis = ArcGIS(timeout=10)
+    arcgis    = ArcGIS(timeout=10)
     nominatim = Nominatim(user_agent="toronto_affordable_housing_mapper", timeout=10)
-    nom_rate = RateLimiter(nominatim.geocode, min_delay_seconds=1.1)
-    return [("arcgis", arcgis.geocode), ("nominatim", nom_rate)]
+    arcgis_rate = RateLimiter(arcgis.geocode,    min_delay_seconds=0.1)
+    nom_rate    = RateLimiter(nominatim.geocode,  min_delay_seconds=1.1)
+    return [("arcgis", arcgis_rate), ("nominatim", nom_rate)]
 
 
 def geocode(address: str, geocoders: list[tuple[str, object]]) -> tuple[float | None, float | None, str]:
@@ -99,7 +100,7 @@ def fetch_all_records(resource_id: str) -> list[dict]:
         offset += limit
         print(f"  Fetched {len(records)}/{total} records...")
 
-        if len(records) >= total:
+        if len(records) >= total or offset > total + limit:
             break
 
     return records
@@ -152,7 +153,7 @@ def _print_summary(df: pd.DataFrame, addr_col: str, out_path: str) -> None:
     arcgis_hits = (df["geocode_source"] == "arcgis").sum()
     nom_hits    = (df["geocode_source"] == "nominatim").sum()
 
-    print(f"\n  Results:")
+    print("\n  Results:")
     print(f"    Total addresses : {total}")
     print(f"    Geocoded        : {success} ({100 * success // (total or 1)}%)")
     print(f"      via ArcGIS    : {arcgis_hits}")

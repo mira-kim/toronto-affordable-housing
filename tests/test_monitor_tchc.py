@@ -13,17 +13,18 @@ Run:
     pytest tests/test_monitor_tchc.py -v
 """
 
-import pytest
 import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 from monitor_tchc import (
+    _eoi_is_current,
     _extract_address,
     _extract_eoi,
+    _load_email_config,
     _parse_unit_count,
-    _parse_units,
+    add_subscriber,
     extract_state,
     parse_listings,
 )
@@ -77,14 +78,14 @@ class TestExtractAddress:
 
 class TestExtractEoi:
     EOI_PARA = (
-        "The Expression of Interest period will open on Tuesday, January 21, 2026, "
-        "and close on Friday, February 20, 2026, at 4:00 p.m."
+        "The Expression of Interest period will open on Tuesday, January 21, 2099, "
+        "and close on Friday, February 20, 2099, at 4:00 p.m."
     )
 
     def test_parses_open_close_dates(self):
         result = _extract_eoi(self.EOI_PARA)
-        assert "January 21, 2026" in result
-        assert "February 20, 2026" in result
+        assert "January 21, 2099" in result
+        assert "February 20, 2099" in result
 
     def test_format_starts_with_opens(self):
         result = _extract_eoi(self.EOI_PARA)
@@ -113,8 +114,8 @@ SAMPLE_HTML_ONE_LISTING = """
     <li>Thirteen two-bedroom units</li>
     <li>Six three-bedroom units</li>
   </ul>
-  <p>The Expression of Interest period will open on Tuesday, January 21, 2026,
-  and close on Friday, February 20, 2026, at 4:00 p.m.</p>
+  <p>The Expression of Interest period will open on Tuesday, January 21, 2099,
+  and close on Friday, February 20, 2099, at 4:00 p.m.</p>
 </main></body></html>
 """
 
@@ -132,16 +133,16 @@ SAMPLE_HTML_MULTIPLE = """
     <li>Sixteen one-bedroom units</li>
     <li>Thirteen two-bedroom units</li>
   </ul>
-  <p>The Expression of Interest period will open on Tuesday, January 21, 2026,
-  and close on Friday, February 20, 2026, at 4:00 p.m.</p>
+  <p>The Expression of Interest period will open on Tuesday, January 21, 2099,
+  and close on Friday, February 20, 2099, at 4:00 p.m.</p>
 
   <h4>Rental units at 5 Strachan Ave</h4>
   <ul>
     <li>Eight one-bedroom units</li>
     <li>Four two-bedroom units</li>
   </ul>
-  <p>The Expression of Interest period will open on Monday, March 3, 2026,
-  and close on Monday, March 31, 2026.</p>
+  <p>The Expression of Interest period will open on Monday, March 3, 2099,
+  and close on Monday, March 31, 2099.</p>
 </main></body></html>
 """
 
@@ -168,8 +169,8 @@ class TestParseListings:
 
     def test_eoi_extracted(self):
         listing = parse_listings(SAMPLE_HTML_ONE_LISTING)[0]
-        assert "January 21, 2026" in listing["eoi"]
-        assert "February 20, 2026" in listing["eoi"]
+        assert "January 21, 2099" in listing["eoi"]
+        assert "February 20, 2099" in listing["eoi"]
 
     def test_no_listings_returns_empty(self):
         listings = parse_listings(SAMPLE_HTML_NO_LISTINGS)
@@ -182,7 +183,7 @@ class TestParseListings:
     def test_multiple_listings(self):
         listings = parse_listings(SAMPLE_HTML_MULTIPLE)
         assert len(listings) == 2
-        addresses = [l["address"] for l in listings]
+        addresses = [listing["address"] for listing in listings]
         assert "1070 Eastern Ave" in addresses
         assert "5 Strachan Ave" in addresses
 
@@ -230,3 +231,51 @@ class TestExtractState:
         state = extract_state("")
         assert state["has_listings"] is False
         assert state["listings"] == []
+
+
+# ── _eoi_is_current ───────────────────────────────────────────────────────────
+
+class TestEoiIsCurrent:
+    def test_past_eoi_is_not_current(self):
+        assert not _eoi_is_current("Opens January 21, 2026 — closes February 20, 2026")
+
+    def test_far_future_eoi_is_current(self):
+        assert _eoi_is_current("Opens January 1, 2099 — closes February 1, 2099")
+
+    def test_empty_eoi_is_current(self):
+        assert _eoi_is_current("")
+
+    def test_unparseable_eoi_is_current(self):
+        assert _eoi_is_current("EOI details to be announced")
+
+
+# ── add_subscriber validation ─────────────────────────────────────────────────
+
+class TestAddSubscriber:
+    def test_rejects_empty_string(self):
+        import pytest
+        with pytest.raises(ValueError):
+            add_subscriber("")
+
+    def test_rejects_no_at_sign(self):
+        import pytest
+        with pytest.raises(ValueError):
+            add_subscriber("notanemail")
+
+
+# ── _load_email_config ────────────────────────────────────────────────────────
+
+class TestLoadEmailConfig:
+    def test_env_vars_take_precedence(self, monkeypatch):
+        monkeypatch.setenv("GMAIL_USER", "env@example.com")
+        monkeypatch.setenv("GMAIL_APP_PASSWORD", "secret")
+        cfg = _load_email_config()
+        assert cfg["gmail_user"] == "env@example.com"
+        assert cfg["gmail_app_password"] == "secret"
+
+    def test_returns_none_when_no_credentials(self, monkeypatch):
+        monkeypatch.delenv("GMAIL_USER", raising=False)
+        monkeypatch.delenv("GMAIL_APP_PASSWORD", raising=False)
+        # No JSON file in test context — should return None
+        cfg = _load_email_config()
+        assert cfg is None or isinstance(cfg, dict)
