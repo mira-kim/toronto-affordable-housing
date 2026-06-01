@@ -2,37 +2,33 @@
 TCHC Affordable Rent Monitor
 Scrapes torontohousing.ca for new listings and notifies subscribers by email.
 
-Setup email notifications (pick one):
-  Option A — environment variables (recommended):
-    set GMAIL_USER=you@gmail.com
-    set GMAIL_APP_PASSWORD=xxxx xxxx xxxx xxxx
-
-  Option B — config file:
-  1. Enable 2-Step Verification on your Gmail account
-  2. Go to myaccount.google.com/apppasswords and generate an App Password
-  3. Create data/email_config.json:
-     { "gmail_user": "you@gmail.com", "gmail_app_password": "xxxx xxxx xxxx xxxx" }
-
-Run standalone:
-  python monitor_tchc.py
+Setup (.env file):
+  SENDGRID_API_KEY=SG.xxxx
+  SENDGRID_FROM=you@yourdomain.com
+  APP_BASE_URL=http://localhost:5001
 """
 
 import hashlib
+import hmac
 import json
 import os
 import re
-import smtplib
+import sqlite3
 from datetime import datetime
-from email.mime.text import MIMEText
+from urllib.parse import urlencode
 
 import requests
 from bs4 import BeautifulSoup
+from dotenv import load_dotenv
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
 
 from config import TCHC_URL
 
-STATE_FILE       = "data/tchc_state.json"
-SUBSCRIBERS_FILE = "data/subscribers.json"
-EMAIL_CONFIG     = "data/email_config.json"
+load_dotenv()
+
+STATE_FILE = "data/tchc_state.json"
+DB_FILE    = "data/subscribers.db"
 
 NUMBER_WORDS = {
     "zero":0,"one":1,"two":2,"three":3,"four":4,"five":5,"six":6,"seven":7,
@@ -215,50 +211,68 @@ def save_state(state: dict):
 
 # ── Subscribers ───────────────────────────────────────────────────────────────
 
+def init_db():
+    os.makedirs("data", exist_ok=True)
+    with sqlite3.connect(DB_FILE) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS subscribers (
+                email      TEXT PRIMARY KEY,
+                token      TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            )
+        """)
+
+
+def _make_token(email: str) -> str:
+    key = os.environ.get("SENDGRID_API_KEY", "").encode()
+    return hmac.new(key, email.encode(), hashlib.sha256).hexdigest()
+
+
 def load_subscribers() -> list[str]:
-    if os.path.exists(SUBSCRIBERS_FILE):
-        with open(SUBSCRIBERS_FILE) as f:
-            return json.load(f).get("emails", [])
-    return []
+    if not os.path.exists(DB_FILE):
+        return []
+    with sqlite3.connect(DB_FILE) as conn:
+        rows = conn.execute("SELECT email FROM subscribers").fetchall()
+    return [r[0] for r in rows]
 
 
 def add_subscriber(email: str) -> bool:
     if not email or "@" not in email:
         raise ValueError(f"Invalid email: {email!r}")
-    os.makedirs("data", exist_ok=True)
-    data = {"emails": []}
-    if os.path.exists(SUBSCRIBERS_FILE):
-        with open(SUBSCRIBERS_FILE) as f:
-            data = json.load(f)
-    if email in data["emails"]:
+    init_db()
+    try:
+        with sqlite3.connect(DB_FILE) as conn:
+            conn.execute(
+                "INSERT INTO subscribers (email, token, created_at) VALUES (?,?,?)",
+                (email, _make_token(email), datetime.now().isoformat()),
+            )
+        return True
+    except sqlite3.IntegrityError:
         return False
-    data["emails"].append(email)
-    with open(SUBSCRIBERS_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-    return True
+
+
+def remove_subscriber(email: str, token: str) -> bool:
+    if not os.path.exists(DB_FILE):
+        return False
+    with sqlite3.connect(DB_FILE) as conn:
+        cur = conn.execute(
+            "DELETE FROM subscribers WHERE email=? AND token=?", (email, token)
+        )
+    return cur.rowcount > 0
 
 
 # ── Email ─────────────────────────────────────────────────────────────────────
-
-def _load_email_config() -> dict | None:
-    """Read credentials from env vars first, fall back to JSON file."""
-    user     = os.environ.get("GMAIL_USER")
-    password = os.environ.get("GMAIL_APP_PASSWORD")
-    if user and password:
-        return {"gmail_user": user, "gmail_app_password": password}
-    if os.path.exists(EMAIL_CONFIG):
-        with open(EMAIL_CONFIG) as f:
-            return json.load(f)
-    return None
-
 
 def send_notifications(listings: list[dict], subscribers: list[str]):
     if not subscribers:
         return
 
-    cfg = _load_email_config()
-    if not cfg:
-        print(f"  No email credentials (set GMAIL_USER/GMAIL_APP_PASSWORD or create {EMAIL_CONFIG})")
+    api_key    = os.environ.get("SENDGRID_API_KEY")
+    from_email = os.environ.get("SENDGRID_FROM")
+    base_url   = os.environ.get("APP_BASE_URL", "http://localhost:5001")
+
+    if not api_key or not from_email:
+        print("  No SendGrid credentials (set SENDGRID_API_KEY and SENDGRID_FROM in .env)")
         return
 
     subject = f"TCHC: New Affordable Units Available — {datetime.now().strftime('%b %d, %Y')}"
@@ -272,21 +286,27 @@ def send_notifications(listings: list[dict], subscribers: list[str]):
         if listing["eoi"]:
             lines.append(f"  {listing['eoi']}")
         lines.append("")
-    lines.append(f"View and apply: {TCHC_URL}")
-    body = "\n".join(lines)
+    lines.append(f"View and apply: {TCHC_URL}\n")
 
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as smtp:
-            smtp.login(cfg["gmail_user"], cfg["gmail_app_password"])
-            for email in subscribers:
-                msg            = MIMEText(body)
-                msg["Subject"] = subject
-                msg["From"]    = cfg["gmail_user"]
-                msg["To"]      = email
-                smtp.sendmail(cfg["gmail_user"], email, msg.as_string())
-                print(f"  Notified: {email}")
-    except Exception as e:
-        print(f"  Email error: {e}")
+    sg   = SendGridAPIClient(api_key)
+    sent = failed = 0
+    for email in subscribers:
+        token   = _make_token(email)
+        unsub   = f"{base_url}/api/unsubscribe?{urlencode({'email': email, 'token': token})}"
+        body    = "\n".join(lines) + f"Unsubscribe: {unsub}"
+        try:
+            msg = Mail(
+                from_email=from_email,
+                to_emails=email,
+                subject=subject,
+                plain_text_content=body,
+            )
+            sg.client.mail.send.post(request_body=msg.get())
+            sent += 1
+        except Exception as e:
+            print(f"  Send failed: {e}")
+            failed += 1
+    print(f"  Notified {sent} subscriber(s), {failed} failed")
 
 
 # ── Main check ────────────────────────────────────────────────────────────────

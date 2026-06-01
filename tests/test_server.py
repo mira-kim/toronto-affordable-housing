@@ -4,6 +4,7 @@ Functional tests for server.py — covers the security/robustness fixes:
   - Rate limiter blocks after N attempts per window
   - /api/subscribe enforces both (via Flask test client)
   - /api/listings returns the listings array
+  - /api/unsubscribe validates token and removes subscriber
 
 Run:
     pytest tests/test_server.py -v
@@ -13,9 +14,21 @@ import sys
 import os
 import time
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+import monitor_tchc
+from monitor_tchc import _make_token, add_subscriber, init_db
 from server import _EMAIL_RE, _is_rate_limited, _sub_attempts, app
+
+
+@pytest.fixture(autouse=True)
+def temp_db(tmp_path, monkeypatch):
+    """Redirect all subscriber DB operations to a fresh temp file per test."""
+    db_path = str(tmp_path / "test_subscribers.db")
+    monkeypatch.setattr(monitor_tchc, "DB_FILE", db_path)
+    init_db()
 
 
 # ── Email regex ───────────────────────────────────────────────────────────────
@@ -111,3 +124,32 @@ class TestListingsEndpoint:
     def test_has_listings_key_present(self):
         r = self.client.get("/api/listings")
         assert "has_listings" in r.get_json()
+
+
+# ── /api/unsubscribe endpoint ─────────────────────────────────────────────────
+
+class TestUnsubscribeEndpoint:
+    def setup_method(self):
+        self.client = app.test_client()
+
+    def test_valid_token_unsubscribes(self):
+        add_subscriber("user@example.com")
+        token = _make_token("user@example.com")
+        r = self.client.get(f"/api/unsubscribe?email=user@example.com&token={token}")
+        assert r.status_code == 200
+
+    def test_wrong_token_returns_400(self):
+        add_subscriber("user@example.com")
+        r = self.client.get("/api/unsubscribe?email=user@example.com&token=badtoken")
+        assert r.status_code == 400
+
+    def test_missing_params_returns_400(self):
+        r = self.client.get("/api/unsubscribe")
+        assert r.status_code == 400
+
+    def test_token_is_single_use(self):
+        add_subscriber("user@example.com")
+        token = _make_token("user@example.com")
+        self.client.get(f"/api/unsubscribe?email=user@example.com&token={token}")
+        r = self.client.get(f"/api/unsubscribe?email=user@example.com&token={token}")
+        assert r.status_code == 400

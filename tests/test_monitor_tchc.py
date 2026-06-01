@@ -1,33 +1,47 @@
 """
-Unit tests for monitor_tchc.py parsing functions.
+Unit tests for monitor_tchc.py parsing and subscriber functions.
 
-Tests cover the three layers of the scraper:
+Tests cover:
   1. _parse_unit_count  — text → integer
   2. _extract_address   — page title → street address
   3. _extract_eoi       — paragraph text → EOI window string
   4. parse_listings     — full HTML → list of structured listing dicts
   5. extract_state      — full HTML → state dict (hash, has_listings, listings)
+  6. add_subscriber / remove_subscriber — SQLite-backed subscriber management
 
 Run:
-    pip install pytest
     pytest tests/test_monitor_tchc.py -v
 """
 
 import sys
 import os
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+import monitor_tchc
 from monitor_tchc import (
     _eoi_is_current,
     _extract_address,
     _extract_eoi,
-    _load_email_config,
+    _make_token,
     _parse_unit_count,
     add_subscriber,
     extract_state,
+    init_db,
+    load_subscribers,
     parse_listings,
+    remove_subscriber,
 )
+
+
+@pytest.fixture(autouse=True)
+def temp_db(tmp_path, monkeypatch):
+    """Redirect all subscriber DB operations to a fresh temp file per test."""
+    db_path = str(tmp_path / "test_subscribers.db")
+    monkeypatch.setattr(monitor_tchc, "DB_FILE", db_path)
+    init_db()
 
 
 # ── _parse_unit_count ─────────────────────────────────────────────────────────
@@ -61,7 +75,6 @@ class TestExtractAddress:
         assert _extract_address(title) == "1070 Eastern Ave"
 
     def test_no_at_prefix(self):
-        # Falls back to stripping the title itself
         result = _extract_address("5 Strachan Ave affordable housing units")
         assert "5 Strachan Ave" in result
 
@@ -249,33 +262,53 @@ class TestEoiIsCurrent:
         assert _eoi_is_current("EOI details to be announced")
 
 
-# ── add_subscriber validation ─────────────────────────────────────────────────
+# ── add_subscriber / remove_subscriber ───────────────────────────────────────
 
 class TestAddSubscriber:
     def test_rejects_empty_string(self):
-        import pytest
         with pytest.raises(ValueError):
             add_subscriber("")
 
     def test_rejects_no_at_sign(self):
-        import pytest
         with pytest.raises(ValueError):
             add_subscriber("notanemail")
 
+    def test_returns_true_on_new_email(self):
+        assert add_subscriber("user@example.com") is True
 
-# ── _load_email_config ────────────────────────────────────────────────────────
+    def test_returns_false_on_duplicate(self):
+        add_subscriber("user@example.com")
+        assert add_subscriber("user@example.com") is False
 
-class TestLoadEmailConfig:
-    def test_env_vars_take_precedence(self, monkeypatch):
-        monkeypatch.setenv("GMAIL_USER", "env@example.com")
-        monkeypatch.setenv("GMAIL_APP_PASSWORD", "secret")
-        cfg = _load_email_config()
-        assert cfg["gmail_user"] == "env@example.com"
-        assert cfg["gmail_app_password"] == "secret"
+    def test_subscriber_is_retrievable(self):
+        add_subscriber("user@example.com")
+        assert "user@example.com" in load_subscribers()
 
-    def test_returns_none_when_no_credentials(self, monkeypatch):
-        monkeypatch.delenv("GMAIL_USER", raising=False)
-        monkeypatch.delenv("GMAIL_APP_PASSWORD", raising=False)
-        # No JSON file in test context — should return None
-        cfg = _load_email_config()
-        assert cfg is None or isinstance(cfg, dict)
+    def test_multiple_subscribers_stored(self):
+        add_subscriber("a@example.com")
+        add_subscriber("b@example.com")
+        subs = load_subscribers()
+        assert "a@example.com" in subs
+        assert "b@example.com" in subs
+
+
+class TestRemoveSubscriber:
+    def test_valid_token_removes_subscriber(self):
+        add_subscriber("user@example.com")
+        token = _make_token("user@example.com")
+        assert remove_subscriber("user@example.com", token) is True
+        assert "user@example.com" not in load_subscribers()
+
+    def test_wrong_token_does_not_remove(self):
+        add_subscriber("user@example.com")
+        assert remove_subscriber("user@example.com", "wrongtoken") is False
+        assert "user@example.com" in load_subscribers()
+
+    def test_unknown_email_returns_false(self):
+        assert remove_subscriber("nobody@example.com", "anytoken") is False
+
+    def test_token_is_single_use(self):
+        add_subscriber("user@example.com")
+        token = _make_token("user@example.com")
+        remove_subscriber("user@example.com", token)
+        assert remove_subscriber("user@example.com", token) is False

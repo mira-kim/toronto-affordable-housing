@@ -1,28 +1,28 @@
 """
-Toronto Housing Map — Local Server
-Serves the map and handles listing checks and email subscriptions.
+Toronto Housing Map — Web Server
+Serves the map and handles listing subscriptions.
 
-Usage:
-    pip install flask
+Production (Docker / gunicorn):
+    gunicorn --workers 1 --bind 0.0.0.0:5001 server:app
+
+Local dev:
     python server.py
-
-Then open http://localhost:5001 in your browser.
-The TCHC listing page is checked every CHECK_INTERVAL_HOURS hours automatically.
 """
 
 import os
 import re
-import threading
 import time
 from collections import defaultdict
 
+from dotenv import load_dotenv
 from flask import Flask, abort, jsonify, request, send_file
 
-from monitor_tchc import add_subscriber, check, load_state
+load_dotenv()
 
-MAP_FILE             = os.path.join("data", "toronto_housing_map.html")
-CHECK_INTERVAL_HOURS = 6
-PORT                 = 5001
+from monitor_tchc import add_subscriber, init_db, load_state, remove_subscriber
+
+MAP_FILE     = os.path.join("data", "toronto_housing_map.html")
+PORT         = 5001
 
 _EMAIL_RE      = re.compile(r'^[^@\s]{1,64}@[^@\s]{1,253}\.[^@\s.]{2,}$')
 _RATE_WINDOW   = 60   # seconds
@@ -30,12 +30,13 @@ _RATE_LIMIT    = 5    # max subscribe attempts per IP per window
 _sub_attempts: dict[str, list[float]] = defaultdict(list)
 
 app = Flask(__name__)
+init_db()  # runs on gunicorn import and on direct invocation
 
 
 def _is_rate_limited(ip: str) -> bool:
-    now     = time.time()
-    cutoff  = now - _RATE_WINDOW
-    recent  = [t for t in _sub_attempts[ip] if t > cutoff]
+    now    = time.time()
+    cutoff = now - _RATE_WINDOW
+    recent = [t for t in _sub_attempts[ip] if t > cutoff]
     _sub_attempts[ip] = recent
     if len(recent) >= _RATE_LIMIT:
         return True
@@ -77,27 +78,21 @@ def api_subscribe():
     return jsonify({"ok": True, "added": added, "message": msg})
 
 
-# ── Background poller ─────────────────────────────────────────────────────────
+@app.route("/api/unsubscribe", methods=["GET"])
+def api_unsubscribe():
+    email = request.args.get("email", "").strip().lower()
+    token = request.args.get("token", "").strip()
+    if not email or not token:
+        return "<p>Invalid unsubscribe link.</p>", 400
+    removed = remove_subscriber(email, token)
+    if removed:
+        return "<p>You have been unsubscribed successfully.</p>", 200
+    return "<p>Unsubscribe link is invalid or already used.</p>", 400
 
-def _poller():
-    check(notify=False)          # initial check on startup — no emails
-    while True:
-        time.sleep(CHECK_INTERVAL_HOURS * 3600)
-        try:
-            check(notify=True)
-        except Exception as e:
-            print(f"  Poller error: {e}")
 
-
-# ── Entry point ───────────────────────────────────────────────────────────────
+# ── Local dev entry point ─────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    t = threading.Thread(target=_poller, daemon=True)
-    t.start()
-
-    print("\nToronto Housing Map server running")
-    print(f"  Map:  http://localhost:{PORT}")
-    print(f"  TCHC listings checked every {CHECK_INTERVAL_HOURS} hours")
-    print("  Press Ctrl+C to stop\n")
-
+    print(f"\nToronto Housing Map — http://localhost:{PORT}")
+    print("Run poller.py separately to check listings.\n")
     app.run(port=PORT, debug=False)
