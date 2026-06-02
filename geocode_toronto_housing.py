@@ -12,16 +12,14 @@ Usage:
     python geocode_toronto_housing.py
 """
 
-import requests
-import pandas as pd
 import os
-from geopy.geocoders import ArcGIS, Nominatim
+
+import pandas as pd
+import requests
 from geopy.extra.rate_limiter import RateLimiter
+from geopy.geocoders import ArcGIS, Nominatim
 
-# ── Config ────────────────────────────────────────────────────────────────────
-
-CKAN_BASE = "https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action"
-GEOCODE_SUFFIX = "Toronto, ON, Canada"
+from config import CKAN_BASE, DATA_DIR, GEOCODE_SUFFIX
 
 DATASETS = {
     "subsidized_buildings": {
@@ -42,7 +40,7 @@ DATASETS = {
     },
 }
 
-OUTPUT_DIR = "data"
+DATA_DIR = "data"
 
 
 # ── Geocoders ─────────────────────────────────────────────────────────────────
@@ -170,7 +168,7 @@ def _print_summary(df: pd.DataFrame, addr_col: str, out_path: str) -> None:
 # ── Main Pipeline ─────────────────────────────────────────────────────────────
 
 def run():
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(DATA_DIR, exist_ok=True)
     geocoders = _build_geocoders()
 
     for name, cfg in DATASETS.items():
@@ -178,7 +176,7 @@ def run():
         print(f"Dataset: {name}")
         print(f"{'='*60}")
 
-        out_path = os.path.join(OUTPUT_DIR, cfg["output_file"])
+        out_path = os.path.join(DATA_DIR, cfg["output_file"])
 
         print("Fetching records from CKAN...")
         records = fetch_all_records(cfg["resource_id"])

@@ -9,9 +9,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from config import CHECK_INTERVAL_HOURS
 from monitor_tchc import check
-
-CHECK_INTERVAL_HOURS = 6
 
 check(notify=False)  # initial check on startup — no emails
 while True:

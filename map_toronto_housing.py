@@ -14,17 +14,13 @@ import json
 import requests
 import pandas as pd
 
-from config import TCHC_URL as TCHC_AFFORDABLE_URL
+from config import (
+    APPLY_URL, CKAN_BASE, CKAN_WAITLIST_RESOURCE, COHB_URL,
+    DATA_DIR, MAP_FILE, TCHC_URL as TCHC_AFFORDABLE_URL,
+)
 
-_HERE       = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR    = "data"
 INPUT_FILE  = os.path.join(DATA_DIR, "subsidized_buildings_geocoded.csv")
-OUTPUT_FILE = os.path.join(DATA_DIR, "toronto_housing_map.html")
-
-APPLY_URL              = "https://www.toronto.ca/community-people/employment-social-support/housing-support/rent-geared-to-income-subsidy/"
-COHB_URL               = "https://www.toronto.ca/community-people/employment-social-support/housing-support/canada-ontario-housing-benefit/"
-CKAN_WAITLIST_RESOURCE = "f8d91828-86dd-42bd-bb0b-0a8e963b6a02"
-CKAN_BASE              = "https://ckan0.cf.opendata.inter.prod-toronto.ca/api/3/action"
+OUTPUT_FILE = MAP_FILE
 
 WARD_NAMES = {
     "1":"Etobicoke North","2":"Etobicoke Centre","3":"Etobicoke–Lakeshore",

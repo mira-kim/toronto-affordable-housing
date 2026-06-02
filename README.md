@@ -1,6 +1,15 @@
 # Toronto Affordable Housing Map
 
+**[torontoaffordablehousingmap.ca](https://torontoaffordablehousingmap.ca)**
+
 An interactive map of Toronto's subsidized and affordable housing buildings, with live monitoring for new TCHC unit listings and email alerts.
+
+## How to use
+
+1. **Explore the map** — each dot is a subsidized housing building. Click a dot to see provider, building type, unit sizes, and accessibility features.
+2. **Filter** — use the sidebar to narrow by bedroom size, provider, ward, building type, or amenities.
+3. **Check availability** — buildings with active TCHC affordable rent listings are highlighted. The page re-checks every 10 minutes.
+4. **Get alerts** — enter your email at the bottom of the page to be notified when new TCHC listings appear or change.
 
 ## What it does
 

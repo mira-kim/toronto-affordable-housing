@@ -19,14 +19,10 @@ from flask import Flask, abort, jsonify, request, send_file
 
 load_dotenv()
 
+from config import MAP_FILE, PORT, RATE_LIMIT, RATE_WINDOW
 from monitor_tchc import add_subscriber, init_db, load_state, remove_subscriber
 
-MAP_FILE     = os.path.join("data", "toronto_housing_map.html")
-PORT         = 5001
-
-_EMAIL_RE      = re.compile(r'^[^@\s]{1,64}@[^@\s]{1,253}\.[^@\s.]{2,}$')
-_RATE_WINDOW   = 60   # seconds
-_RATE_LIMIT    = 5    # max subscribe attempts per IP per window
+_EMAIL_RE = re.compile(r'^[^@\s]{1,64}@[^@\s]{1,253}\.[^@\s.]{2,}$')
 _sub_attempts: dict[str, list[float]] = defaultdict(list)
 
 app = Flask(__name__)
@@ -35,10 +31,10 @@ init_db()  # runs on gunicorn import and on direct invocation
 
 def _is_rate_limited(ip: str) -> bool:
     now    = time.time()
-    cutoff = now - _RATE_WINDOW
+    cutoff = now - RATE_WINDOW
     recent = [t for t in _sub_attempts[ip] if t > cutoff]
     _sub_attempts[ip] = recent
-    if len(recent) >= _RATE_LIMIT:
+    if len(recent) >= RATE_LIMIT:
         return True
     _sub_attempts[ip].append(now)
     return False

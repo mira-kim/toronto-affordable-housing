@@ -23,12 +23,9 @@ from dotenv import load_dotenv
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 
-from config import TCHC_URL
+from config import DB_FILE, FETCH_TIMEOUT, STATE_FILE, TCHC_URL, USER_AGENT
 
 load_dotenv()
-
-STATE_FILE = "data/tchc_state.json"
-DB_FILE    = "data/subscribers.db"
 
 NUMBER_WORDS = {
     "zero":0,"one":1,"two":2,"three":3,"four":4,"five":5,"six":6,"seven":7,
@@ -43,8 +40,8 @@ NUMBER_WORDS = {
 def fetch_page() -> str:
     resp = requests.get(
         TCHC_URL,
-        timeout=15,
-        headers={"User-Agent": "Mozilla/5.0 (toronto-housing-monitor/1.0)"},
+        timeout=FETCH_TIMEOUT,
+        headers={"User-Agent": USER_AGENT},
     )
     resp.raise_for_status()
     return resp.text
