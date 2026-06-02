@@ -1,2 +1,2 @@
   [deploy]
-  startCommand = "gunicorn --workers 1 --bind 0.0.0.0:$PORT server:app"
+  startCommand = "sh start.sh"
