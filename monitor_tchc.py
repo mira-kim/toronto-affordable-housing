@@ -260,14 +260,45 @@ def remove_subscriber(email: str, token: str) -> bool:
 
 # ── Email ─────────────────────────────────────────────────────────────────────
 
+def _sendgrid_credentials() -> tuple[str | None, str | None, str]:
+    return (
+        os.environ.get("SENDGRID_API_KEY"),
+        os.environ.get("SENDGRID_FROM"),
+        os.environ.get("APP_BASE_URL", "http://localhost:5001"),
+    )
+
+
+def send_confirmation(email: str):
+    api_key, from_email, base_url = _sendgrid_credentials()
+    if not api_key or not from_email:
+        return
+
+    token  = _make_token(email)
+    unsub  = f"{base_url}/api/unsubscribe?{urlencode({'email': email, 'token': token})}"
+    body   = (
+        "You're now subscribed to Toronto Affordable Housing Map alerts.\n\n"
+        "You'll receive an email when new TCHC affordable rent units become available "
+        "at torontohousing.ca.\n\n"
+        f"View the map: {base_url}\n\n"
+        f"Unsubscribe: {unsub}"
+    )
+    try:
+        msg = Mail(
+            from_email=from_email,
+            to_emails=email,
+            subject="You're subscribed to TCHC housing alerts",
+            plain_text_content=body,
+        )
+        SendGridAPIClient(api_key).client.mail.send.post(request_body=msg.get())
+    except Exception as e:
+        print(f"  Confirmation send failed: {e}")
+
+
 def send_notifications(listings: list[dict], subscribers: list[str]):
     if not subscribers:
         return
 
-    api_key    = os.environ.get("SENDGRID_API_KEY")
-    from_email = os.environ.get("SENDGRID_FROM")
-    base_url   = os.environ.get("APP_BASE_URL", "http://localhost:5001")
-
+    api_key, from_email, base_url = _sendgrid_credentials()
     if not api_key or not from_email:
         print("  No SendGrid credentials (set SENDGRID_API_KEY and SENDGRID_FROM in .env)")
         return

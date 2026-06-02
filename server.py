@@ -20,7 +20,7 @@ from flask import Flask, abort, jsonify, request, send_file
 load_dotenv()
 
 from config import MAP_FILE, PORT, RATE_LIMIT, RATE_WINDOW
-from monitor_tchc import add_subscriber, init_db, load_state, remove_subscriber
+from monitor_tchc import add_subscriber, init_db, load_state, remove_subscriber, send_confirmation
 
 _EMAIL_RE = re.compile(r'^[^@\s]{1,64}@[^@\s]{1,253}\.[^@\s.]{2,}$')
 _sub_attempts: dict[str, list[float]] = defaultdict(list)
@@ -70,7 +70,9 @@ def api_subscribe():
     if not _EMAIL_RE.match(email):
         return jsonify({"ok": False, "error": "Enter a valid email address"}), 400
     added = add_subscriber(email)
-    msg   = "Subscribed! You'll be notified when new TCHC units open." if added else "Already subscribed."
+    if added:
+        send_confirmation(email)
+    msg = "Subscribed! Check your email for a confirmation." if added else "Already subscribed."
     return jsonify({"ok": True, "added": added, "message": msg})
 
 
