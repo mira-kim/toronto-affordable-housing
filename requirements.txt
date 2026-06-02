@@ -4,3 +4,5 @@ requests
 beautifulsoup4
 sendgrid
 python-dotenv
+pandas
+geopy
