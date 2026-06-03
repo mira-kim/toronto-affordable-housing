@@ -19,7 +19,7 @@ from flask import Flask, abort, jsonify, request, send_file
 
 load_dotenv()
 
-from config import MAP_FILE, PORT, RATE_LIMIT, RATE_WINDOW
+from config import MAP_FILE, RATE_LIMIT, RATE_WINDOW
 from monitor_tchc import add_subscriber, init_db, load_state, remove_subscriber, send_confirmation
 
 _EMAIL_RE = re.compile(r'^[^@\s]{1,64}@[^@\s]{1,253}\.[^@\s.]{2,}$')
@@ -91,6 +91,7 @@ def api_unsubscribe():
 # ── Local dev entry point ─────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    print(f"\nToronto Housing Map — http://localhost:{PORT}")
+    port = int(os.environ.get("PORT", 5001))
+    print(f"\nToronto Housing Map — http://localhost:{port}")
     print("Run poller.py separately to check listings.\n")
-    app.run(port=PORT, debug=False)
+    app.run(port=port, debug=False)

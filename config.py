@@ -3,7 +3,6 @@ STATE_FILE  = "data/tchc_state.json"
 DB_FILE     = "data/subscribers.db"
 MAP_FILE    = "data/toronto_housing_map.html"
 
-PORT                 = 5001
 CHECK_INTERVAL_HOURS = 24
 FETCH_TIMEOUT        = 15
 RATE_WINDOW          = 60

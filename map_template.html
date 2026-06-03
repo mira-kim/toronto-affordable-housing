@@ -250,6 +250,7 @@ const OPTIONS   = __OPTIONS__;
 const APPLY_URL        = __APPLY_URL__;
 const COHB_URL         = __COHB_URL__;
 const TCHC_AFFORDABLE  = __TCHC_AFFORDABLE_URL__;
+const UNITS_BY_BUILDING = __UNITS_BY_BUILDING__;
 
 // ── Map ───────────────────────────────────────────────────────────────────────
 let map, cluster;
@@ -436,6 +437,17 @@ function buildPopup(b) {
   // Features: only show Yes ones as a compact line
   const feats = FEAT_FIELDS.filter(f => b[f] === 'Yes').map(f => x(f));
   if (feats.length) rows += row('Features', feats.join(' &middot; '));
+
+  const unitData = (UNITS_BY_BUILDING && UNITS_BY_BUILDING[b['Building Complex Name'] || '']) || [];
+  if (unitData.length) {
+    rows += '<tr><td colspan="2" style="padding-top:8px;padding-bottom:2px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#9ca3af">Eligibility</td></tr>';
+    unitData.forEach(u => {
+      const parts = [];
+      if (u.income_limit) parts.push('≤ $' + Number(u.income_limit).toLocaleString());
+      if (u.available_last_12m != null && u.available_last_12m !== '') parts.push(u.available_last_12m + ' avail. last 12 mo');
+      if (parts.length) rows += row(x(u.unit_size || ''), x(parts.join(' · ')));
+    });
+  }
 
   const isTCHC = b['Provider Type'] === 'TCHC';
 
