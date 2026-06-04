@@ -6,3 +6,4 @@ sendgrid
 python-dotenv
 pandas
 geopy
+psycopg2-binary

@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
 from urllib.parse import urlencode
 
@@ -208,10 +209,34 @@ def save_state(state: dict):
 
 # ── Subscribers ───────────────────────────────────────────────────────────────
 
+_DB_URL = os.environ.get("DATABASE_URL")
+_PH     = "%s" if _DB_URL else "?"
+
+
+@contextmanager
+def _db():
+    """Yield a DB connection: Postgres when DATABASE_URL is set, SQLite otherwise."""
+    if _DB_URL:
+        import psycopg2
+        conn = psycopg2.connect(_DB_URL)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+    else:
+        os.makedirs("data", exist_ok=True)
+        with sqlite3.connect(DB_FILE) as conn:
+            yield conn
+
+
 def init_db():
-    os.makedirs("data", exist_ok=True)
-    with sqlite3.connect(DB_FILE) as conn:
-        conn.execute("""
+    with _db() as conn:
+        cur = conn.cursor()
+        cur.execute("""
             CREATE TABLE IF NOT EXISTS subscribers (
                 email      TEXT PRIMARY KEY,
                 token      TEXT NOT NULL,
@@ -226,11 +251,13 @@ def _make_token(email: str) -> str:
 
 
 def load_subscribers() -> list[str]:
-    if not os.path.exists(DB_FILE):
+    try:
+        with _db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT email FROM subscribers")
+            return [r[0] for r in cur.fetchall()]
+    except Exception:
         return []
-    with sqlite3.connect(DB_FILE) as conn:
-        rows = conn.execute("SELECT email FROM subscribers").fetchall()
-    return [r[0] for r in rows]
 
 
 def add_subscriber(email: str) -> bool:
@@ -238,24 +265,30 @@ def add_subscriber(email: str) -> bool:
         raise ValueError(f"Invalid email: {email!r}")
     init_db()
     try:
-        with sqlite3.connect(DB_FILE) as conn:
-            conn.execute(
-                "INSERT INTO subscribers (email, token, created_at) VALUES (?,?,?)",
+        with _db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"INSERT INTO subscribers (email, token, created_at) VALUES ({_PH},{_PH},{_PH})",
                 (email, _make_token(email), datetime.now().isoformat()),
             )
         return True
-    except sqlite3.IntegrityError:
-        return False
+    except Exception as e:
+        if "unique" in str(e).lower() or "duplicate" in str(e).lower():
+            return False
+        raise
 
 
 def remove_subscriber(email: str, token: str) -> bool:
-    if not os.path.exists(DB_FILE):
+    try:
+        with _db() as conn:
+            cur = conn.cursor()
+            cur.execute(
+                f"DELETE FROM subscribers WHERE email={_PH} AND token={_PH}",
+                (email, token),
+            )
+            return cur.rowcount > 0
+    except Exception:
         return False
-    with sqlite3.connect(DB_FILE) as conn:
-        cur = conn.execute(
-            "DELETE FROM subscribers WHERE email=? AND token=?", (email, token)
-        )
-    return cur.rowcount > 0
 
 
 # ── Email ─────────────────────────────────────────────────────────────────────

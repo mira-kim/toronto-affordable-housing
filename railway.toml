@@ -1,2 +1,2 @@
-  [deploy]
-  startCommand = "sh start.sh"
+[deploy]
+startCommand = "sh start.sh"
